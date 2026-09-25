@@ -11,12 +11,40 @@ import {
   type CourseModule,
   type CourseProject,
   type Difficulty,
+  type FrozenVersion,
   type GestureZone,
   type LessonStep,
   type ValidationCheck,
 } from '../../models';
 
 type PreviewSize = 'phone' | 'tablet';
+type RightPanel = 'preview' | 'history';
+
+interface SnapshotContext {
+  version: FrozenVersion;
+  module: CourseModule;
+  step: LessonStep;
+}
+
+const STEP_DIFF_FIELDS: Array<{ key: keyof LessonStep; label: string }> = [
+  { key: 'title', label: '步骤标题' },
+  { key: 'kind', label: '步骤类型' },
+  { key: 'difficulty', label: '难度标签' },
+  { key: 'duration', label: '预计时长' },
+  { key: 'demoTitle', label: '示范片段名称' },
+  { key: 'demoUrl', label: '素材地址' },
+  { key: 'camera', label: '镜头角度' },
+  { key: 'gestureZone', label: '主要手形区域' },
+  { key: 'handshape', label: '手形说明' },
+  { key: 'caption', label: '步骤字幕' },
+  { key: 'captionPosition', label: '字幕位置' },
+  { key: 'altText', label: '替代文本' },
+  { key: 'prerequisiteId', label: '前置条件' },
+  { key: 'cuePoints', label: '检查点' },
+  { key: 'commonMistakes', label: '常见错误' },
+  { key: 'exercise', label: '练习任务' },
+  { key: 'exerciseFeedback', label: '练习反馈' },
+];
 
 @Component({
   tag: 'app-root',
@@ -27,6 +55,11 @@ export class AppRoot {
   @State() project: CourseProject = createDemoProject();
   @State() previewSize: PreviewSize = 'phone';
   @State() activePanel: 'editor' | 'checks' = 'editor';
+  @State() rightPanel: RightPanel = 'preview';
+  @State() expandedVersionId = '';
+  @State() snapshotSelection?: { versionId: string; stepId: string };
+  @State() applyFields: string[] = [];
+  @State() historyNotice?: { color: string; message: string };
   @State() playing = false;
   @State() playProgress = 0;
   @State() offline = typeof navigator !== 'undefined' ? !navigator.onLine : false;
@@ -332,6 +365,102 @@ export class AppRoot {
     return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
   }
 
+  private get snapshotContext(): SnapshotContext | undefined {
+    if (!this.snapshotSelection) return undefined;
+    const version = this.project.frozenVersions.find((item) => item.id === this.snapshotSelection?.versionId);
+    if (!version) return undefined;
+    for (const module of version.snapshot.modules) {
+      const step = module.steps.find((item) => item.id === this.snapshotSelection?.stepId);
+      if (step) return { version, module, step };
+    }
+    return undefined;
+  }
+
+  private fieldEquals(a: unknown, b: unknown): boolean {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  private formatFieldValue(key: keyof LessonStep, step: LessonStep | undefined, module: CourseModule | undefined): string {
+    if (!step) return '—';
+    const value = step[key];
+    if (key === 'prerequisiteId') {
+      if (!value) return '无前置条件';
+      const target = module?.steps.find((item) => item.id === value);
+      return target ? target.title : `步骤已缺失（${value}）`;
+    }
+    if (Array.isArray(value)) {
+      if (!value.length) return '（空）';
+      return key === 'cuePoints' ? value.map((cue) => `${cue}s`).join('、') : value.join('；');
+    }
+    if (typeof value === 'number') return key === 'duration' ? `${value} 秒` : String(value);
+    return value ? String(value) : '（空）';
+  }
+
+  private selectSnapshotStep(versionId: string, stepId: string): void {
+    this.snapshotSelection = { versionId, stepId };
+    this.historyNotice = undefined;
+    const context = this.snapshotContext;
+    const current = this.currentStep;
+    this.applyFields = context && current
+      ? STEP_DIFF_FIELDS.filter(({ key }) => !this.fieldEquals(context.step[key], current[key])).map(({ key }) => key)
+      : [];
+  }
+
+  private toggleApplyField(key: string): void {
+    this.applyFields = this.applyFields.includes(key)
+      ? this.applyFields.filter((item) => item !== key)
+      : [...this.applyFields, key];
+  }
+
+  private applySnapshotStep(): void {
+    const context = this.snapshotContext;
+    const current = this.currentStep;
+    const module = this.currentModule;
+    if (!context || !current || !module) return;
+    if (this.project.status === 'frozen') {
+      this.showToast('warning', '当前版本已冻结，请先创建修订版再套用旧字段。');
+      return;
+    }
+
+    const patch: Partial<LessonStep> = {};
+    const applied: string[] = [];
+    let prerequisiteIssue = '';
+    const currentIndex = module.steps.findIndex((item) => item.id === current.id);
+
+    for (const { key, label } of STEP_DIFF_FIELDS) {
+      if (!this.applyFields.includes(key)) continue;
+      if (this.fieldEquals(context.step[key], current[key])) continue;
+      if (key === 'prerequisiteId') {
+        const oldPrerequisite = context.step.prerequisiteId;
+        if (oldPrerequisite) {
+          const prerequisiteIndex = module.steps.findIndex((item) => item.id === oldPrerequisite);
+          if (prerequisiteIndex < 0) {
+            prerequisiteIssue = '前置条件未套用：旧步骤依赖的步骤在当前模块中不存在，已保留当前前置条件。';
+            continue;
+          }
+          if (prerequisiteIndex >= currentIndex) {
+            prerequisiteIssue = `前置条件未套用：「${module.steps[prerequisiteIndex].title}」在当前模块中排在本步之后，会打断学习顺序，已保留当前前置条件。`;
+            continue;
+          }
+        }
+      }
+      (patch as Record<string, unknown>)[key] = structuredClone(context.step[key]);
+      applied.push(label);
+    }
+
+    if (applied.length === 0) {
+      this.historyNotice = { color: 'warning', message: prerequisiteIssue || '没有可套用的差异字段。' };
+      if (prerequisiteIssue) this.showToast('warning', prerequisiteIssue);
+      return;
+    }
+
+    this.updateStep(patch);
+    this.historyNotice = prerequisiteIssue
+      ? { color: 'warning', message: `已套用 ${applied.length} 个字段（${applied.join('、')}）。${prerequisiteIssue}` }
+      : { color: 'success', message: `已套用 ${applied.length} 个字段：${applied.join('、')}。步骤编号与后续依赖保持不变，可用「撤销」回退，冻结记录与草稿均已保留。` };
+    this.showToast(prerequisiteIssue ? 'warning' : 'success', prerequisiteIssue ? '部分字段已套用，前置条件保留原值。' : '已把冻结版本的字段套用到当前步骤。');
+  }
+
   private renderStatusBadge() {
     if (this.project.status === 'review') return <ion-badge color="warning">待复核</ion-badge>;
     if (this.project.status === 'changes') return <ion-badge color="danger">已退回</ion-badge>;
@@ -463,13 +592,13 @@ export class AppRoot {
     );
   }
 
-  private renderPreview() {
+  private renderPreviewBody() {
     const step = this.currentStep;
     const progress = Math.round(this.playProgress * 100);
     return (
-      <section class="preview-panel">
-        <div class="preview-head">
-          <div><span class="eyebrow">学习者预览</span><h2>设备与安全区检查</h2></div>
+      <div class="preview-body">
+        <div class="preview-toolbar">
+          <span>预览尺寸</span>
           <ion-segment value={this.previewSize} class="studio-segment" onIonChange={(event) => { this.previewSize = event.detail.value as PreviewSize; }}>
             <ion-segment-button value="phone">手机</ion-segment-button>
             <ion-segment-button value="tablet">平板</ion-segment-button>
@@ -507,6 +636,117 @@ export class AppRoot {
             <p class="preview-caption-text">{step.caption}</p>
           </div>
         ) : <div class="empty-preview">选择步骤后显示设备预览。</div>}
+      </div>
+    );
+  }
+
+  private renderHistory() {
+    const versions = this.project.frozenVersions;
+    const context = this.snapshotContext;
+    const current = this.currentStep;
+    return (
+      <div class="history-panel">
+        {versions.length === 0 ? (
+          <div class="empty-history">
+            <strong>还没有冻结版本</strong>
+            <p>提交复核并冻结版本后，这里会记录当时的步骤快照，可随时对比差异并把旧字段套用到当前步骤。</p>
+          </div>
+        ) : (
+          <div class="version-list">
+            {versions.map((version) => {
+              const expanded = this.expandedVersionId === version.id;
+              const stepCount = version.snapshot.modules.reduce((sum, item) => sum + item.steps.length, 0);
+              return (
+                <section class={`version-card ${expanded ? 'expanded' : ''}`} key={version.id}>
+                  <button class="version-head" onClick={() => { this.expandedVersionId = expanded ? '' : version.id; }}>
+                    <span class={`version-toggle ${expanded ? 'open' : ''}`}>▸</span>
+                    <span class="version-copy">
+                      <strong>{version.label}</strong>
+                      <small>{this.formatDate(version.createdAt)} · {version.snapshot.modules.length} 个模块 · {stepCount} 个步骤</small>
+                    </span>
+                  </button>
+                  {expanded && (
+                    <div class="version-steps">
+                      {version.snapshot.modules.map((module) => (
+                        <div class="version-module" key={module.id}>
+                          <span class="version-module-title">{module.title}</span>
+                          {module.steps.map((step, index) => (
+                            <button
+                              class={`version-step ${this.snapshotSelection?.versionId === version.id && this.snapshotSelection?.stepId === step.id ? 'active' : ''}`}
+                              key={step.id}
+                              onClick={() => this.selectSnapshotStep(version.id, step.id)}
+                            >
+                              <span class="step-index">{String(index + 1).padStart(2, '0')}</span>
+                              <span class="step-copy">
+                                <strong>{step.title}</strong>
+                                <small>{step.kind} · {step.duration}s · {step.difficulty}</small>
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        )}
+        {context && !current && <div class="history-note">请先在左侧选择一个当前步骤，再对比差异。</div>}
+        {context && current && this.renderSnapshotDiff(context, current)}
+      </div>
+    );
+  }
+
+  private renderSnapshotDiff(context: SnapshotContext, current: LessonStep) {
+    const module = this.currentModule;
+    const rows = STEP_DIFF_FIELDS.map(({ key, label }) => ({
+      key,
+      label,
+      changed: !this.fieldEquals(context.step[key], current[key]),
+      oldValue: this.formatFieldValue(key, context.step, context.module),
+      newValue: this.formatFieldValue(key, current, module),
+    }));
+    const changedCount = rows.filter((row) => row.changed).length;
+    const selectedCount = rows.filter((row) => row.changed && this.applyFields.includes(row.key)).length;
+    return (
+      <section class="diff-card">
+        <div class="diff-head">
+          <span class="eyebrow">与当前步骤对比</span>
+          <h3>{context.step.title}</h3>
+          <p>{context.version.label} → 当前「{current.title}」 · {changedCount} 个字段不同</p>
+        </div>
+        <div class="diff-list">
+          {rows.map((row) => (
+            <label class={`diff-row ${row.changed ? 'changed' : 'same'}`} key={row.key}>
+              <input
+                type="checkbox"
+                disabled={!row.changed}
+                checked={row.changed && this.applyFields.includes(row.key)}
+                onChange={() => this.toggleApplyField(row.key)}
+              />
+              <span class="diff-field">{row.label}</span>
+              <span class="diff-values">
+                <span class="diff-old">{row.oldValue}</span>
+                <span class="diff-arrow">→</span>
+                <span class="diff-new">{row.newValue}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        {this.historyNotice && <div class={`history-notice ${this.historyNotice.color}`}>{this.historyNotice.message}</div>}
+        <div class="diff-actions">
+          <ion-button
+            class="studio-button"
+            disabled={selectedCount === 0 || this.project.status === 'frozen'}
+            onClick={() => this.applySnapshotStep()}
+          >套用选中字段到当前步骤</ion-button>
+          <p>
+            {this.project.status === 'frozen'
+              ? '当前为冻结版本，需先创建修订版才能套用。'
+              : '沿用当前步骤编号，后续步骤的依赖关系保持不变；操作可撤销，冻结记录与草稿不受影响。'}
+          </p>
+        </div>
       </section>
     );
   }
@@ -613,7 +853,19 @@ export class AppRoot {
                 <div class="editor-scroll">{this.activePanel === 'editor' ? this.renderStepEditor() : this.renderChecks()}</div>
               </section>
 
-              {this.renderPreview()}
+              <section class="preview-panel">
+                <div class="preview-head">
+                  <div>
+                    <span class="eyebrow">{this.rightPanel === 'preview' ? '学习者预览' : '版本记录'}</span>
+                    <h2>{this.rightPanel === 'preview' ? '设备与安全区检查' : '冻结版本历史'}</h2>
+                  </div>
+                  <ion-segment value={this.rightPanel} class="studio-segment right-panel-segment" onIonChange={(event) => { this.rightPanel = event.detail.value as RightPanel; }}>
+                    <ion-segment-button value="preview">预览</ion-segment-button>
+                    <ion-segment-button value="history">版本记录{this.project.frozenVersions.length > 0 ? ` (${this.project.frozenVersions.length})` : ''}</ion-segment-button>
+                  </ion-segment>
+                </div>
+                {this.rightPanel === 'preview' ? this.renderPreviewBody() : this.renderHistory()}
+              </section>
             </main>
           </ion-content>
           <ion-toast isOpen={Boolean(this.toast)} message={this.toast?.message} color={this.toast?.color} duration={3200} onDidDismiss={() => { this.toast = undefined; }} />
