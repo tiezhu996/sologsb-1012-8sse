@@ -11,12 +11,38 @@ import {
   type CourseModule,
   type CourseProject,
   type Difficulty,
+  type FrozenVersion,
   type GestureZone,
   type LessonStep,
   type ValidationCheck,
 } from '../../models';
 
 type PreviewSize = 'phone' | 'tablet';
+
+interface HistorySelection {
+  versionId: string;
+  stepId: string;
+}
+
+const DIFF_FIELDS: { key: keyof LessonStep; label: string }[] = [
+  { key: 'title', label: '步骤标题' },
+  { key: 'kind', label: '步骤类型' },
+  { key: 'difficulty', label: '难度标签' },
+  { key: 'duration', label: '预计时长(秒)' },
+  { key: 'demoTitle', label: '示范片段' },
+  { key: 'demoUrl', label: '素材地址' },
+  { key: 'camera', label: '镜头角度' },
+  { key: 'gestureZone', label: '手形区域' },
+  { key: 'handshape', label: '手形说明' },
+  { key: 'caption', label: '步骤字幕' },
+  { key: 'captionPosition', label: '字幕位置' },
+  { key: 'altText', label: '替代文本' },
+  { key: 'prerequisiteId', label: '前置条件' },
+  { key: 'cuePoints', label: '检查点(秒)' },
+  { key: 'commonMistakes', label: '常见错误' },
+  { key: 'exercise', label: '练习任务' },
+  { key: 'exerciseFeedback', label: '练习反馈' },
+];
 
 @Component({
   tag: 'app-root',
@@ -31,6 +57,8 @@ export class AppRoot {
   @State() playProgress = 0;
   @State() offline = typeof navigator !== 'undefined' ? !navigator.onLine : false;
   @State() toast?: { color: string; message: string };
+  @State() expandedVersionId = '';
+  @State() historySelection?: HistorySelection;
   private past: CourseProject[] = [];
   private future: CourseProject[] = [];
   private playTimer?: number;
@@ -308,6 +336,69 @@ export class AppRoot {
     this.commit((draft) => ({ ...draft, status: 'draft' }), '已创建修订版，可继续编辑。');
   }
 
+  private toggleVersion(versionId: string): void {
+    this.expandedVersionId = this.expandedVersionId === versionId ? '' : versionId;
+  }
+
+  private selectHistoryStep(versionId: string, stepId: string): void {
+    this.historySelection = { versionId, stepId };
+  }
+
+  private findHistoryStep(): { version: FrozenVersion; step: LessonStep } | undefined {
+    const selection = this.historySelection;
+    if (!selection) return undefined;
+    const version = this.project.frozenVersions.find((item) => item.id === selection.versionId);
+    const step = version?.snapshot.modules.flatMap((module) => module.steps).find((item) => item.id === selection.stepId);
+    return version && step ? { version, step } : undefined;
+  }
+
+  private formatStepField(step: LessonStep, key: keyof LessonStep, modules: CourseModule[]): string {
+    const value = step[key];
+    if (key === 'prerequisiteId') {
+      if (!step.prerequisiteId) return '无前置条件';
+      const title = modules.flatMap((module) => module.steps).find((item) => item.id === step.prerequisiteId)?.title;
+      return title ? `「${title}」` : `缺失的前置（${step.prerequisiteId}）`;
+    }
+    if (Array.isArray(value)) return value.length ? value.join('、') : '（空）';
+    return value === '' || value === undefined || value === null ? '（空）' : String(value);
+  }
+
+  private buildStepDiff(oldStep: LessonStep, version: FrozenVersion, current: LessonStep) {
+    return DIFF_FIELDS.map(({ key, label }) => ({
+      key,
+      label,
+      before: this.formatStepField(oldStep, key, version.snapshot.modules),
+      after: this.formatStepField(current, key, this.project.modules),
+      changed: JSON.stringify(oldStep[key]) !== JSON.stringify(current[key]),
+    }));
+  }
+
+  private prerequisiteIssue(oldStep: LessonStep): string | undefined {
+    if (!oldStep.prerequisiteId) return undefined;
+    const module = this.currentModule;
+    const current = this.currentStep;
+    if (!module || !current) return undefined;
+    const currentIndex = module.steps.findIndex((step) => step.id === current.id);
+    const prerequisiteIndex = module.steps.findIndex((step) => step.id === oldStep.prerequisiteId);
+    if (prerequisiteIndex < 0) return `旧步骤的前置条件（${oldStep.prerequisiteId}）在当前模块中不存在`;
+    if (prerequisiteIndex >= currentIndex) return `旧步骤的前置条件「${module.steps[prerequisiteIndex].title}」排在本步之后`;
+    return undefined;
+  }
+
+  private applyHistoryStep(): void {
+    const found = this.findHistoryStep();
+    const current = this.currentStep;
+    if (!found || !current) return;
+    const issue = this.prerequisiteIssue(found.step);
+    if (issue) {
+      this.showToast('danger', `无法套用：${issue}，继续套用会打断学习顺序，已保留当前步骤原内容。`);
+      return;
+    }
+    const fields = structuredClone(found.step) as Partial<LessonStep>;
+    delete fields.id;
+    this.updateStep(fields, `已把「${found.version.label}」的字段套用到当前步骤（编号不变），可撤销。`);
+  }
+
   private togglePlay(): void {
     if (this.playTimer) {
       window.clearInterval(this.playTimer);
@@ -507,7 +598,105 @@ export class AppRoot {
             <p class="preview-caption-text">{step.caption}</p>
           </div>
         ) : <div class="empty-preview">选择步骤后显示设备预览。</div>}
+        {this.renderVersionHistory()}
       </section>
+    );
+  }
+
+  private renderVersionHistory() {
+    const versions = this.project.frozenVersions;
+    const found = this.findHistoryStep();
+    return (
+      <section class="version-panel">
+        <div class="version-head">
+          <div><span class="eyebrow">版本记录</span><h2>冻结版本与历史步骤</h2></div>
+          <span class="version-count">{versions.length} 个版本</span>
+        </div>
+        {versions.length === 0 && (
+          <p class="version-empty">还没有冻结版本。提交复核并冻结后，可在这里展开版本、找回当时的步骤并套用到当前步骤。</p>
+        )}
+        <div class="version-list">
+          {versions.map((version) => {
+            const expanded = this.expandedVersionId === version.id;
+            const stepCount = version.snapshot.modules.reduce((sum, module) => sum + module.steps.length, 0);
+            return (
+              <div class={`version-card ${expanded ? 'expanded' : ''}`} key={version.id}>
+                <button class="version-card-head" onClick={() => this.toggleVersion(version.id)}>
+                  <span class={`version-caret ${expanded ? 'open' : ''}`}>▸</span>
+                  <span class="version-title">
+                    <strong>{version.label}</strong>
+                    <small>{this.formatDate(version.createdAt)} 冻结 · {stepCount} 个步骤</small>
+                  </span>
+                </button>
+                {expanded && (
+                  <div class="version-steps">
+                    {version.snapshot.modules.map((module) => (
+                      <div class="version-module" key={module.id}>
+                        <span class="version-module-title">{module.title}</span>
+                        {module.steps.length === 0 && <p class="version-module-empty">该模块当时没有学习步骤。</p>}
+                        {module.steps.map((step, index) => (
+                          <button
+                            key={step.id}
+                            class={`version-step ${this.historySelection?.versionId === version.id && this.historySelection?.stepId === step.id ? 'selected' : ''}`}
+                            onClick={() => this.selectHistoryStep(version.id, step.id)}
+                          >
+                            <span class="step-index">{String(index + 1).padStart(2, '0')}</span>
+                            <span class="step-copy">
+                              <strong>{step.title}</strong>
+                              <small>{step.kind} · {step.duration}s · {step.difficulty}</small>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {found && this.renderHistoryDiff(found.version, found.step)}
+      </section>
+    );
+  }
+
+  private renderHistoryDiff(version: FrozenVersion, oldStep: LessonStep) {
+    const current = this.currentStep;
+    if (!current) return <p class="version-empty">当前模块没有可对比的步骤。</p>;
+    const module = this.currentModule;
+    const changed = this.buildStepDiff(oldStep, version, current).filter((row) => row.changed);
+    const issue = this.prerequisiteIssue(oldStep);
+    const frozen = this.project.status === 'frozen';
+    const currentIndex = module.steps.findIndex((step) => step.id === current.id);
+    return (
+      <div class="history-diff">
+        <div class="history-diff-head">
+          <div>
+            <span class="eyebrow">与当前步骤的差异</span>
+            <h3>「{oldStep.title}」 → 第 {currentIndex + 1} 步「{current.title}」</h3>
+            <p>{changed.length ? `${changed.length} 个字段不同，未列出的字段与当前步骤一致。` : '所有字段与当前步骤一致，无需套用。'}</p>
+          </div>
+          <button class="diff-close" title="关闭对比" onClick={() => { this.historySelection = undefined; }}>×</button>
+        </div>
+        {changed.length > 0 && (
+          <div class="diff-table">
+            <div class="diff-row diff-row-head"><span>字段</span><span>冻结版本</span><span>当前步骤</span></div>
+            {changed.map((row) => (
+              <div class="diff-row changed" key={row.key}>
+                <span class="diff-label">{row.label}</span>
+                <span class="diff-value old">{row.before}</span>
+                <span class="diff-value new">{row.after}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {issue && <p class="diff-issue">⚠ {issue}。套用会打断学习顺序，请先调整当前模块的步骤顺序。</p>}
+        {frozen && <p class="diff-issue">当前版本已冻结，请先在编辑器中「创建修订版」再套用历史字段。</p>}
+        <div class="diff-actions">
+          <ion-button size="small" class="studio-button" disabled={frozen} onClick={() => this.applyHistoryStep()}>套用旧字段到当前步骤</ion-button>
+        </div>
+        <p class="diff-note">套用只替换字段内容：当前步骤编号与排序位置不变，后续步骤的依赖不会被打断；操作可撤销，冻结记录与草稿保留。</p>
+      </div>
     );
   }
 

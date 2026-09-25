@@ -176,6 +176,50 @@ ion-content { --background: var(--studio-canvas); }
 .preview-caption-text { margin: 0; padding: 11px 12px; border-top: 1px solid #3a5650; background: #203b35; color: #d9ebe6; font-size: 10px; line-height: 1.5; }
 .empty-preview { height: 300px; display: grid; place-items: center; color: var(--studio-muted); font-size: 11px; }
 
+.version-panel { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--studio-line); }
+.version-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.version-head h2 { margin: 3px 0 0; font-size: 14px; }
+.version-count { color: var(--studio-muted); font-size: 9px; }
+.version-empty { margin: 10px 0 0; padding: 13px; border: 1px dashed var(--studio-line); border-radius: 8px; background: #f7faf9; color: var(--studio-muted); font-size: 10px; line-height: 1.55; }
+.version-list { margin-top: 10px; display: flex; flex-direction: column; gap: 7px; }
+.version-card { border: 1px solid var(--studio-line); border-radius: 9px; background: #fff; overflow: hidden; }
+.version-card.expanded { border-color: #84b8ad; box-shadow: 0 0 0 2px rgba(44,121,108,.07); }
+.version-card-head { width: 100%; padding: 10px 11px; display: grid; grid-template-columns: 14px 1fr; align-items: center; gap: 7px; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.version-card-head:hover { background: #f5f9f7; }
+.version-caret { color: #588078; font-size: 10px; transition: transform .15s ease; }
+.version-caret.open { transform: rotate(90deg); }
+.version-title { min-width: 0; }
+.version-title strong, .version-title small { display: block; }
+.version-title strong { font-size: 11px; }
+.version-title small { margin-top: 3px; color: var(--studio-muted); font-size: 9px; }
+.version-steps { padding: 8px 8px 10px; border-top: 1px dashed var(--studio-line); }
+.version-module + .version-module { margin-top: 9px; }
+.version-module-title { display: block; margin-bottom: 4px; color: #588078; font-size: 9px; font-weight: 700; }
+.version-module-empty { margin: 2px 0; color: var(--studio-muted); font-size: 9px; }
+.version-step {
+  width: 100%; margin-top: 3px; padding: 6px 7px; display: grid; grid-template-columns: 24px 1fr;
+  align-items: center; gap: 7px; border: 1px solid transparent; border-radius: 6px; background: #f5f8f7; text-align: left; cursor: pointer;
+}
+.version-step:hover { background: #edf4f2; }
+.version-step.selected { background: #e4f2ed; border-color: #84b8ad; }
+.history-diff { margin-top: 12px; padding: 12px; border: 1px solid #84b8ad; border-radius: 10px; background: #fff; box-shadow: 0 2px 8px rgba(23,60,53,.05); }
+.history-diff-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.history-diff-head h3 { margin: 3px 0 2px; font-size: 12px; line-height: 1.4; }
+.history-diff-head p { margin: 0; color: var(--studio-muted); font-size: 9px; }
+.diff-close { flex: none; width: 22px; height: 22px; border: 1px solid var(--studio-line); border-radius: 50%; background: #fff; color: var(--studio-muted); cursor: pointer; font-size: 11px; line-height: 1; }
+.diff-table { margin-top: 10px; border: 1px solid var(--studio-line); border-radius: 7px; overflow: hidden; }
+.diff-row { display: grid; grid-template-columns: 60px 1fr 1fr; gap: 8px; padding: 6px 8px; font-size: 9px; line-height: 1.5; word-break: break-all; }
+.diff-row + .diff-row { border-top: 1px solid #eef3f1; }
+.diff-row-head { background: #f1f6f4; color: var(--studio-muted); font-weight: 700; }
+.diff-row.changed { background: #fff8ec; }
+.diff-label { color: var(--studio-muted); font-weight: 700; }
+.diff-row.changed .diff-label { color: #8e5300; }
+.diff-value.old { color: #8e5300; }
+.diff-value.new { color: #155f55; }
+.diff-issue { margin: 10px 0 0; padding: 8px 9px; border-left: 3px solid #d92d20; border-radius: 4px; background: #fff5f4; color: #b42318; font-size: 9px; line-height: 1.5; }
+.diff-actions { margin-top: 10px; display: flex; justify-content: flex-end; }
+.diff-note { margin: 8px 0 0; color: var(--studio-muted); font-size: 9px; line-height: 1.5; }
+
 .checks-panel { padding: 16px; }
 .checks-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
 .check-stat { padding: 11px; border: 1px solid var(--studio-line); border-radius: 8px; background: #fff; }
